@@ -14,7 +14,7 @@ import soundfile as sf
 
 # Pridaj src do path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-from inference import AudioDenoiser
+from src.inference import AudioDenoiser
 
 
 # ============================================================
