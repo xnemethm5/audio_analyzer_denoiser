@@ -1,0 +1,21 @@
+{
+  "clean_dir": "C:\\Users\\18mar\\Desktop\\denoiser\\src\\..\\data\\clean",
+  "noise_dir": "C:\\Users\\18mar\\Desktop\\denoiser\\src\\..\\data\\noise",
+  "model_dir": "C:\\Users\\18mar\\Desktop\\denoiser\\src\\..\\models",
+  "sample_rate": 44100,
+  "segment_length": 352800,
+  "n_fft": 4096,
+  "hop_length": 1024,
+  "snr_range": "(0, 20)",
+  "epochs": 100,
+  "batch_size": 4,
+  "learning_rate": 0.0003,
+  "weight_decay": 0.0001,
+  "num_samples_train": 8000,
+  "num_samples_val": 800,
+  "num_workers": 0,
+  "scheduler_patience": 5,
+  "scheduler_factor": 0.5,
+  "min_lr": 1e-06,
+  "early_stopping_patience": 15
+}
