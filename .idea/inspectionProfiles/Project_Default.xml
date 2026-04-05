@@ -1,0 +1,79 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="altair" />
+          <option value="attrs" />
+          <option value="audioop-lts" />
+          <option value="audioread" />
+          <option value="blinker" />
+          <option value="cachetools" />
+          <option value="certifi" />
+          <option value="cffi" />
+          <option value="charset-normalizer" />
+          <option value="click" />
+          <option value="colorama" />
+          <option value="decorator" />
+          <option value="gitdb" />
+          <option value="GitPython" />
+          <option value="idna" />
+          <option value="Jinja2" />
+          <option value="joblib" />
+          <option value="jsonschema" />
+          <option value="jsonschema-specifications" />
+          <option value="lazy_loader" />
+          <option value="librosa" />
+          <option value="llvmlite" />
+          <option value="MarkupSafe" />
+          <option value="msgpack" />
+          <option value="narwhals" />
+          <option value="numba" />
+          <option value="numpy" />
+          <option value="packaging" />
+          <option value="pandas" />
+          <option value="pillow" />
+          <option value="platformdirs" />
+          <option value="pooch" />
+          <option value="protobuf" />
+          <option value="pyarrow" />
+          <option value="pycparser" />
+          <option value="pydeck" />
+          <option value="python-dateutil" />
+          <option value="pytz" />
+          <option value="referencing" />
+          <option value="requests" />
+          <option value="rpds-py" />
+          <option value="scikit-learn" />
+          <option value="scipy" />
+          <option value="six" />
+          <option value="smmap" />
+          <option value="soundfile" />
+          <option value="soxr" />
+          <option value="standard-aifc" />
+          <option value="standard-chunk" />
+          <option value="standard-sunau" />
+          <option value="streamlit" />
+          <option value="tenacity" />
+          <option value="threadpoolctl" />
+          <option value="toml" />
+          <option value="tornado" />
+          <option value="typing_extensions" />
+          <option value="tzdata" />
+          <option value="urllib3" />
+          <option value="watchdog" />
+          <option value="pedalboard" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyStubPackagesAdvertiser" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="scipy" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="UnsatisfiedRequirementInspection" enabled="false" level="WARNING" enabled_by_default="false" />
+  </profile>
+</component>
