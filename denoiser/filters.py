@@ -84,21 +84,20 @@ def harmonic_mask(
         hmask: np.ndarray (n_bins, n_frames) s hodnotami >= 1.0
     """
     freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    fmin_hz = librosa.note_to_hz("C2")
+    fmax_hz = librosa.note_to_hz("C7")
     try:
         with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Trying to estimate tuning from empty frequency set",
-                category=UserWarning,
-            )
-            f0, voiced_flag, _ = librosa.pyin(
+            warnings.filterwarnings("ignore", category=UserWarning)
+            f0 = librosa.yin(
                 y,
-                fmin=librosa.note_to_hz("C2"),
-                fmax=librosa.note_to_hz("C7"),
+                fmin=fmin_hz,
+                fmax=fmax_hz,
                 sr=sr,
                 hop_length=hop,
                 frame_length=n_fft,
             )
+        voiced_flag = (f0 >= fmin_hz * 0.9) & (f0 <= fmax_hz * 1.1)
     except Exception:
         return np.ones((n_fft // 2 + 1, 1))
 

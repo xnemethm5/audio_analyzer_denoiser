@@ -1,48 +1,40 @@
 import streamlit as st
 import os
+import sys
 import uuid
 import numpy as np
 import soundfile as sf
+import librosa
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+
+# U-Net path setup
+_unet_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Unet", "src")
+sys.path.insert(0, _unet_src)
+
+try:
+    from inference import AudioDenoiser
+    _UNET_AVAILABLE = True
+except Exception:
+    _UNET_AVAILABLE = False
+
 from classifier import classify_genre
 from denoiser import denoise_audio
+from denoiser.noise_estimation import estimate_snr
 from noise import add_noise
 
-st.set_page_config(page_title="Audio Analyzer", page_icon="🎵", layout="centered")
+st.set_page_config(page_title="Audio Analyzer", page_icon="🎵", layout="wide")
 
-# Adaptive CSS - funguje v svetlom aj tmavom mode
 st.markdown("""
 <style>
-@media (prefers-color-scheme: dark) {
-    :root {
-        --text-primary:   #ffffff;
-        --text-secondary: #bbbbbb;
-        --text-muted:     #888888;
-        --bg-chip:        #2a2a2a;
-        --border-chip:    #444444;
-        --bg-bar:         #333333;
-        --border-divider: #2a2a2a;
-        --border-col:     #444444;
-    }
-}
-@media (prefers-color-scheme: light) {
-    :root {
-        --text-primary:   #111111;
-        --text-secondary: #333333;
-        --text-muted:     #555555;
-        --bg-chip:        #f0f0f0;
-        --border-chip:    #cccccc;
-        --bg-bar:         #e0e0e0;
-        --border-divider: #dddddd;
-        --border-col:     #cccccc;
-    }
-}
-.az-text    { color: var(--text-primary) !important; }
-.az-sub     { color: var(--text-secondary) !important; }
-.az-muted   { color: var(--text-muted) !important; }
+/*
+ * Všetky farby sú zámerne vynechané — texty dedia farbu od Streamlit témy
+ * (color: inherit). Takto fungujú správne v light aj dark móde bez ohľadu
+ * na OS preferenciu. Semi-transparentné rgba() pozadia a opacity pre
+ * stlmený text sa automaticky prispôsobujú tmavému aj svetlému pozadiu.
+ */
 
 .az-genre-wrap  { margin-bottom: 0.75rem; }
 .az-genre-label {
@@ -51,10 +43,10 @@ st.markdown("""
     font-size: 0.92rem;
     font-weight: 600;
     margin-bottom: 5px;
-    color: var(--text-primary);
+    /* farba: inherit zo Streamlit témy */
 }
 .az-bar-bg {
-    background: var(--bg-bar);
+    background: rgba(128, 128, 128, 0.18);
     border-radius: 6px;
     height: 12px;
     overflow: hidden;
@@ -63,36 +55,41 @@ st.markdown("""
 
 .az-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px 0; }
 .az-chip  {
-    background: var(--bg-chip);
-    border: 1px solid var(--border-chip);
+    background: rgba(128, 128, 128, 0.10);
+    border: 1px solid rgba(128, 128, 128, 0.22);
     border-radius: 20px;
     padding: 5px 14px;
     font-size: 0.82rem;
-    color: var(--text-primary);
+    /* farba: inherit */
 }
-.az-chip-label { color: var(--text-muted); margin-right: 4px; }
-.az-chip-value { color: var(--text-primary); font-weight: 600; }
+.az-chip-label { opacity: 0.58; margin-right: 4px; }
+.az-chip-value { font-weight: 600; }
 
 .az-section {
     font-size: 1.05rem;
     font-weight: 700;
-    color: var(--text-primary);
     margin: 1.6rem 0 0.7rem 0;
+    /* farba: inherit */
 }
 .az-col-title {
     font-size: 0.8rem;
     font-weight: 700;
-    color: var(--text-secondary);
+    opacity: 0.60;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 0.6rem;
-    border-bottom: 1px solid var(--border-col);
+    border-bottom: 1px solid rgba(128, 128, 128, 0.28);
     padding-bottom: 4px;
 }
 .az-divider {
     border: none;
-    border-top: 1px solid var(--border-divider);
+    border-top: 1px solid rgba(128, 128, 128, 0.18);
     margin: 1.4rem 0;
+}
+.az-sub {
+    font-size: 0.85rem;
+    margin-top: 4px;
+    opacity: 0.72;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -119,14 +116,16 @@ def genre_bars(genres):
 
 def chips(**kwargs):
     inner = "".join(
-        f"<div class='az-chip'><span class='az-chip-label'>{k}:</span><span class='az-chip-value'>{v}</span></div>"
+        f"<div class='az-chip'><span class='az-chip-label'>{k}:</span>"
+        f"<span class='az-chip-value'>{v}</span></div>"
         for k, v in kwargs.items()
     )
     st.markdown(f"<div class='az-chips'>{inner}</div>", unsafe_allow_html=True)
 
 
 def section(icon, title):
-    st.markdown(f"<div class='az-section'>{icon}&nbsp; {title}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='az-section'>{icon}&nbsp; {title}</div>",
+                unsafe_allow_html=True)
 
 
 def divider():
@@ -138,145 +137,262 @@ def col_title(text):
 
 
 def note(text):
-    st.markdown(f"<p class='az-sub' style='font-size:0.85rem; margin-top:4px;'>{text}</p>",
-                unsafe_allow_html=True)
+    st.markdown(f"<p class='az-sub'>{text}</p>", unsafe_allow_html=True)
 
 
+# ── Analytický panel – rovnaký formát pre oba denoisery ───────────────────────
 
-
-# ── Diagnostika ────────────────────────────────────────────────────────────────
-
-def show_diagnostics(input_path, output_path, result_denoise):
-    """Zobrazí diagnostický panel so spektrogramami a textovými metrikami."""
+def show_analysis_panel(input_path: str, output_path: str,
+                        snr_before: float, snr_after: float) -> None:
+    """
+    Zobrazí spektrogramy, waveform a metriky.
+    Rovnaký formát pre klasický aj U-Net denoiser.
+    """
     try:
-        y_orig,  sr1 = sf.read(input_path,  always_2d=False)
-        y_clean, sr2 = sf.read(output_path, always_2d=False)
+        y_orig,  sr = sf.read(input_path,  always_2d=False)
+        y_clean, _  = sf.read(output_path, always_2d=False)
     except Exception:
-        st.warning("Diagnostika: súbory nie sú dostupné (už boli zmazané).")
+        st.warning("Analytika: súbory nie sú dostupné.")
         return
 
     if y_orig.ndim  > 1: y_orig  = y_orig.mean(axis=1)
     if y_clean.ndim > 1: y_clean = y_clean.mean(axis=1)
-    sr = sr1
 
     min_len = min(len(y_orig), len(y_clean))
     y_orig  = y_orig[:min_len].astype(np.float32)
     y_clean = y_clean[:min_len].astype(np.float32)
 
-    # --- Výpočet spektrogramov ---
-    n_fft = 2048
-    hop   = 512
+    # ── STFT pomocou librosa (Hann okno, správny výsledok) ────────────────
+    n_fft, hop = 2048, 512
 
-    def stft_db(y):
-        D   = np.abs(np.fft.rfft(
-            np.array([y[i:i+n_fft] for i in range(0, len(y)-n_fft, hop)
-                      if i+n_fft <= len(y)]), axis=1
-        ).T)
-        return 20 * np.log10(D + 1e-10)
+    D_orig  = librosa.stft(y_orig,  n_fft=n_fft, hop_length=hop)
+    D_clean = librosa.stft(y_clean, n_fft=n_fft, hop_length=hop)
 
-    spec_orig  = stft_db(y_orig)
-    spec_clean = stft_db(y_clean)
-    spec_diff  = spec_orig - spec_clean   # čo bolo odfiltrované
+    # Spoločná referencia → škály sú porovnateľné
+    ref_val    = np.max(np.abs(D_orig)) + 1e-10
+    spec_orig  = librosa.amplitude_to_db(np.abs(D_orig),  ref=ref_val)
+    spec_clean = librosa.amplitude_to_db(np.abs(D_clean), ref=ref_val)
+    spec_diff  = spec_orig - spec_clean   # kladné = odfiltrované
 
-    # --- Frekvenčná os ---
-    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
-    times = np.arange(spec_orig.shape[1]) * hop / sr
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    times = librosa.frames_to_time(
+        np.arange(spec_orig.shape[1]), sr=sr, hop_length=hop
+    )
 
-    # --- Priemerné spektrum (pred vs po) ---
     avg_orig  = spec_orig.mean(axis=1)
     avg_clean = spec_clean.mean(axis=1)
     avg_diff  = avg_orig - avg_clean
 
-    # --- Figure ---
-    fig = plt.figure(figsize=(12, 9), facecolor="none")
-    gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.55, wspace=0.35)
+    # ── Figura: spektrogramy + waveform ──────────────────────────────────
+    # facecolor="white" — matplotlib renderuje ako PNG obrázok, nie CSS element.
+    # Biele pozadie zaručuje čitateľnosť textu v light aj dark Streamlit móde.
+    fig = plt.figure(figsize=(16, 11), facecolor="white")
+    gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.55, wspace=0.30)
 
-    cmap_spec = "magma"
-    cmap_diff = "RdYlGn_r"
-    vmin, vmax = -90, 0
+    vmin, vmax   = -80, 0
+    diff_abs_max = max(float(np.percentile(np.abs(spec_diff), 99)), 1.0)
 
-    def _spec_ax(ax, data, title, cmap=cmap_spec):
+    def _spec_ax(ax, data, title, cmap="magma", v0=vmin, v1=vmax):
         im = ax.imshow(
             data, aspect="auto", origin="lower", cmap=cmap,
-            extent=[times[0], times[-1], freqs[0]/1000, freqs[-1]/1000],
-            vmin=vmin, vmax=vmax,
+            extent=[times[0], times[-1], freqs[0] / 1000, freqs[-1] / 1000],
+            vmin=v0, vmax=v1,
         )
-        ax.set_title(title, fontsize=9, pad=4)
-        ax.set_xlabel("čas (s)", fontsize=7)
-        ax.set_ylabel("freq (kHz)", fontsize=7)
-        ax.tick_params(labelsize=7)
-        plt.colorbar(im, ax=ax, pad=0.02).ax.tick_params(labelsize=6)
+        ax.set_title(title, fontsize=10, pad=5)
+        ax.set_xlabel("čas (s)", fontsize=8)
+        ax.set_ylabel("freq (kHz)", fontsize=8)
+        ax.tick_params(labelsize=8)
+        plt.colorbar(im, ax=ax, pad=0.02).ax.tick_params(labelsize=7)
 
-    # Spektrogramy
     _spec_ax(fig.add_subplot(gs[0, 0]), spec_orig,  "Spektrogram – originál")
     _spec_ax(fig.add_subplot(gs[0, 1]), spec_clean, "Spektrogram – po denoising")
-    _spec_ax(fig.add_subplot(gs[1, 0]), spec_diff,
-             "Odfiltrovaná energia (pred − po)", cmap=cmap_diff)
+    _spec_ax(
+        fig.add_subplot(gs[1, 0]), spec_diff,
+        "Odfiltrovaná energia (originál − čistý) [dB]",
+        cmap="RdYlGn_r", v0=0, v1=diff_abs_max,
+    )
 
-    # Priemerné spektrum
+    # Priemerné frekvenčné spektrum
     ax_avg = fig.add_subplot(gs[1, 1])
-    ax_avg.plot(freqs / 1000, avg_orig,  label="originál",   linewidth=1.0, color="#5b8dd9")
-    ax_avg.plot(freqs / 1000, avg_clean, label="po denoising", linewidth=1.0, color="#57c785")
+    ax_avg.plot(freqs / 1000, avg_orig,  label="originál",    lw=1.2, color="#5b8dd9")
+    ax_avg.plot(freqs / 1000, avg_clean, label="po denoising", lw=1.2, color="#57c785")
     ax_avg.fill_between(freqs / 1000, avg_orig, avg_clean,
-                        where=(avg_orig > avg_clean), alpha=0.25,
-                        color="#e05c5c", label="odfiltrované")
-    ax_avg.set_title("Priemerné frekvenčné spektrum", fontsize=9, pad=4)
-    ax_avg.set_xlabel("freq (kHz)", fontsize=7)
-    ax_avg.set_ylabel("dB", fontsize=7)
-    ax_avg.legend(fontsize=6)
-    ax_avg.tick_params(labelsize=7)
+                        where=(avg_orig > avg_clean),
+                        alpha=0.25, color="#e05c5c", label="odfiltrované")
+    ax_avg.set_title("Priemerné frekvenčné spektrum", fontsize=10, pad=5)
+    ax_avg.set_xlabel("freq (kHz)", fontsize=8)
+    ax_avg.set_ylabel("dB", fontsize=8)
+    ax_avg.legend(fontsize=8)
+    ax_avg.tick_params(labelsize=8)
     ax_avg.set_xlim(0, sr / 2000)
 
-    # Waveformy
+    # Waveform (celá šírka)
     t = np.arange(min_len) / sr
-    ax_wave = fig.add_subplot(gs[2, :])
-    ax_wave.plot(t, y_orig,  alpha=0.55, linewidth=0.4, label="originál",   color="#5b8dd9")
-    ax_wave.plot(t, y_clean, alpha=0.80, linewidth=0.4, label="po denoising", color="#57c785")
-    ax_wave.set_title("Waveform porovnanie", fontsize=9, pad=4)
-    ax_wave.set_xlabel("čas (s)", fontsize=7)
-    ax_wave.set_ylabel("amplitúda", fontsize=7)
-    ax_wave.legend(fontsize=6, loc="upper right")
-    ax_wave.tick_params(labelsize=7)
+    ax_w = fig.add_subplot(gs[2, :])
+    ax_w.plot(t, y_orig,  alpha=0.55, lw=0.35, label="originál",    color="#5b8dd9")
+    ax_w.plot(t, y_clean, alpha=0.85, lw=0.35, label="po denoising", color="#57c785")
+    ax_w.set_title("Waveform – porovnanie", fontsize=10, pad=5)
+    ax_w.set_xlabel("čas (s)", fontsize=8)
+    ax_w.set_ylabel("amplitúda", fontsize=8)
+    ax_w.legend(fontsize=8, loc="upper right")
+    ax_w.tick_params(labelsize=8)
+    ax_w.set_xlim(t[0], t[-1])
 
     st.pyplot(fig)
     plt.close(fig)
 
-    # --- Textové metriky ---
+    # ── Textové metriky ───────────────────────────────────────────────────
     noise_est    = y_orig - y_clean
     noise_rms    = float(np.sqrt(np.mean(noise_est ** 2)))
     signal_rms   = float(np.sqrt(np.mean(y_clean ** 2)))
     residual_snr = 20 * np.log10(signal_rms / (noise_rms + 1e-10))
 
-    # Per-band redukcia
-    bands = [(0,250,"Sub-bas"), (250,2000,"Bas/stred"),
-             (2000,6000,"Výšky stred"), (6000,20000,"Výšky")]
+    bands = [
+        (0,     250,   "Sub-bas"),
+        (250,   2000,  "Bas / stred"),
+        (2000,  6000,  "Výšky stred"),
+        (6000,  20000, "Výšky"),
+    ]
     band_data = []
     for lo, hi, name in bands:
         idx = np.where((freqs >= lo) & (freqs < hi))[0]
         if len(idx) == 0:
             continue
-        red = float(np.mean(avg_diff[idx]))
-        band_data.append({"Pásmo": name, "Redukcia (dB)": f"{red:+.2f}"})
+        band_data.append({
+            "Pásmo": name,
+            "Redukcia (dB)": f"{float(np.mean(avg_diff[idx])):+.2f}",
+        })
 
-    col1, col2 = st.columns(2)
-    with col1:
+    c1, c2 = st.columns(2)
+    with c1:
         st.markdown("**Per-band redukcia šumu**")
         st.table(band_data)
-    with col2:
+    with c2:
         st.markdown("**Detailné metriky**")
         st.markdown(f"""
 | Metrika | Hodnota |
 |---|---|
+| SNR pred denoising | `{snr_before:.1f} dB` |
+| SNR po denoising | `{snr_after:.1f} dB` |
+| Δ SNR | `{snr_after - snr_before:+.2f} dB` |
 | Odfiltrovaná energia (RMS) | `{noise_rms:.5f}` |
 | Signál po denoising (RMS) | `{signal_rms:.4f}` |
-| Odhadovaný reziduálny SNR | `{residual_snr:.1f} dB` |
-| Noise type | `{result_denoise.get("noise_type", "—")}` |
-| Spectral slope | `{result_denoise.get("slope", "—")}` |
-| Engine | `{result_denoise["engine"]}` |
+| Reziduálny SNR (odhadovaný) | `{residual_snr:.1f} dB` |
         """)
 
 
+# ── Textový súhrn výsledkov ────────────────────────────────────────────────────
+
+def build_summary_text(
+    filename:       str,
+    result_before:  dict,
+    result_classic: dict,
+    result_after:   dict,
+    unet_snr_after: float | None,
+    unet_strength:  float | None,
+    unet_chunk:     float | None,
+    unet_device:    str   | None,
+) -> str:
+    """
+    Zostaví plain-text súhrn všetkých výstupných parametrov jedného behu.
+    Formát je určený na jednoduché kopírovanie a posielanie na ďalšiu analýzu.
+    """
+    lines = []
+    sep   = "=" * 52
+
+    # ── Hlavička ──────────────────────────────────────────
+    lines += [sep, "  AUDIO ANALYZER – výsledky", sep]
+    lines.append(f"Súbor    : {filename}")
+    lines.append(f"Trvanie  : {result_before['total_duration']} s")
+    lines.append(f"Úseky    : {result_before['segments_analyzed']}")
+    lines.append("")
+
+    # ── Klasifikácia pred denoising ───────────────────────
+    lines.append("── Klasifikácia pred denoising ─────────────────────")
+    for i, g in enumerate(result_before["genres"], 1):
+        lines.append(f"  {i}. {g['genre'].capitalize():<14} {g['probability']:.1f} %")
+    lines.append("")
+
+    # ── Klasický denoiser ─────────────────────────────────
+    snr_b  = result_classic["snr_before"]
+    snr_c  = result_classic["snr_after"]
+    diff_c = round(snr_c - snr_b, 2)
+
+    lines.append("── Klasický denoiser ───────────────────────────────")
+    lines.append(f"  Profil     : {result_classic['profile_used']}")
+    lines.append(f"  Noise type : {result_classic.get('noise_type', '—')}")
+    lines.append(f"  Engine     : {result_classic['engine']}")
+    lines.append(f"  SNR pred   : {snr_b:.2f} dB")
+    lines.append(f"  SNR po     : {snr_c:.2f} dB")
+    lines.append(f"  Δ SNR      : {diff_c:+.2f} dB")
+    lines.append("")
+
+    # ── U-Net denoiser ────────────────────────────────────
+    lines.append("── U-Net denoiser ──────────────────────────────────")
+    if unet_snr_after is not None:
+        diff_u = round(unet_snr_after - snr_b, 2)
+        lines.append(f"  Sila       : {unet_strength:.2f}")
+        lines.append(f"  Chunk      : {unet_chunk:.0f} s")
+        lines.append(f"  Device     : {unet_device}")
+        lines.append(f"  SNR pred   : {snr_b:.2f} dB")
+        lines.append(f"  SNR po     : {unet_snr_after:.2f} dB")
+        lines.append(f"  Δ SNR      : {diff_u:+.2f} dB")
+    else:
+        lines.append("  (nedostupný)")
+    lines.append("")
+
+    # ── Klasifikácia po denoising ─────────────────────────
+    lines.append("── Klasifikácia po denoising ────────────────────────")
+    for i, g in enumerate(result_after["genres"], 1):
+        lines.append(f"  {i}. {g['genre'].capitalize():<14} {g['probability']:.1f} %")
+    lines.append("")
+    lines.append(sep)
+
+    return "\n".join(lines)
+
+
+# ── U-Net model (cached) ────────────────────────────────────────────────────────
+
+@st.cache_resource
+def load_unet_model():
+    if not _UNET_AVAILABLE:
+        return None
+    model_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "Unet", "models", "best_model.pth"
+    )
+    if not os.path.exists(model_path):
+        return None
+    try:
+        return AudioDenoiser(model_path)
+    except Exception:
+        return None
+
+
+# ── Sidebar – U-Net nastavenia ─────────────────────────────────────────────────
+
+with st.sidebar:
+    st.header("⚙️ U-Net nastavenia")
+    unet_strength = st.slider(
+        "Sila denoisingu", min_value=0.0, max_value=1.0, value=0.8, step=0.05,
+        help="0.0 = žiadny efekt, 1.0 = maximálne odstránenie šumu",
+    )
+    unet_chunk_seconds = st.slider(
+        "Veľkosť chunku (s)", min_value=3.0, max_value=30.0, value=10.0, step=1.0,
+        help="Dlhšie chunky = lepšia kvalita, viac pamäte",
+    )
+
+unet_denoiser = load_unet_model()
+
+with st.sidebar:
+    if unet_denoiser is not None:
+        st.success("✅ U-Net model načítaný")
+        st.info(f"Zariadenie: {unet_denoiser.device}")
+    else:
+        st.warning("⚠️ U-Net model nedostupný")
+
+
 # ── Hlavička ───────────────────────────────────────────────────────────────────
+
 st.markdown("## 🎵 Audio Analyzer")
 note("Nahraj MP3 alebo WAV súbor – zistíme žáner a odfiltrujeme šum")
 
@@ -286,10 +402,11 @@ uploaded_file = st.file_uploader("Vyber audio súbor", type=["mp3", "wav"],
                                   label_visibility="collapsed")
 
 if uploaded_file is not None:
-    uid = str(uuid.uuid4())
-    ext = os.path.splitext(uploaded_file.name)[1]
+    uid         = str(uuid.uuid4())
+    ext         = os.path.splitext(uploaded_file.name)[1]
     input_path  = f"uploads/{uid}_input{ext}"
     output_path = f"uploads/{uid}_clean.wav"
+    unet_path   = f"uploads/{uid}_unet.wav"
     noisy_path  = f"uploads/{uid}_noisy.wav"
 
     with open(input_path, "wb") as f:
@@ -302,7 +419,7 @@ if uploaded_file is not None:
         "Režim",
         ["🔍 Analyzovať žáner a odstrániť šum", "🔊 Pridať šum"],
         horizontal=True,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
     )
 
     divider()
@@ -313,6 +430,7 @@ if uploaded_file is not None:
     if mode == "🔍 Analyzovať žáner a odstrániť šum":
         if st.button("🔍 Spustiť analýzu", use_container_width=True, type="primary"):
 
+            # 1. Klasifikácia žánru
             with st.spinner("Analyzujem žáner..."):
                 try:
                     result_before = classify_genre(input_path)
@@ -323,54 +441,131 @@ if uploaded_file is not None:
             section("🎸", "Klasifikácia žánru – pôvodná nahrávka")
             chips(
                 Úsekov=result_before["segments_analyzed"],
-                Trvanie=f"{result_before['total_duration']} s"
+                Trvanie=f"{result_before['total_duration']} s",
             )
             genre_bars(result_before["genres"])
             divider()
 
-            with st.spinner("Odstraňujem šum..."):
+            # 2. Klasický denoiser
+            with st.spinner("Klasický denoiser – odstraňujem šum..."):
                 try:
-                    result_denoise = denoise_audio(
+                    result_classic = denoise_audio(
                         input_path, output_path,
-                        genres=result_before["genres"]
+                        genres=result_before["genres"],
                     )
                 except Exception as e:
-                    st.error(f"Chyba pri odstraňovaní šumu: {e}")
+                    st.error(f"Chyba pri klasickom denoising: {e}")
                     st.stop()
 
-            section("🔇", "Redukcia šumu")
-            chips(
-                Profil=result_denoise["profile_used"],
-                Noise=result_denoise.get("noise_type", "—").capitalize(),
-                Engine=result_denoise["engine"]
-            )
+            # 3. U-Net denoiser
+            unet_snr_after = None
+            unet_error     = None
 
-            snr_diff = round(result_denoise["snr_after"] - result_denoise["snr_before"], 2)
-            col1, col2, col3 = st.columns(3)
-            col1.metric("SNR pred",  f"{result_denoise['snr_before']} dB")
-            col2.metric("SNR po",    f"{result_denoise['snr_after']} dB")
-            col3.metric("Rozdiel",   f"{snr_diff:+.2f} dB",
-                        delta=f"{snr_diff:+.2f} dB", delta_color="normal")
+            if unet_denoiser is not None:
+                with st.spinner("U-Net denoiser – odstraňujem šum..."):
+                    try:
+                        unet_denoiser.denoise_file(
+                            input_path, unet_path,
+                            unet_strength, unet_chunk_seconds,
+                        )
+                        y_u, sr_u      = sf.read(unet_path, always_2d=False)
+                        y_u_mono       = y_u if y_u.ndim == 1 else y_u.mean(axis=1)
+                        unet_snr_after = round(float(estimate_snr(y_u_mono, sr_u)), 2)
+                    except Exception as e:
+                        unet_error = str(e)
 
-            if abs(snr_diff) < 0.1:
-                st.info("Nahrávka neobsahuje merateľný šum – denoising nebol potrebný.")
-            elif snr_diff > 0:
-                st.success(f"Šum úspešne redukovaný o {snr_diff} dB")
-            else:
-                st.warning("Denoising mierne znížil kvalitu – odporúčame pôvodný súbor.")
+            # ── Súhrnné porovnanie vedľa seba ─────────────────────────────
+            section("🔇", "Porovnanie denoisingu")
 
-            st.audio(output_path, format="audio/wav")
-            with open(output_path, "rb") as f:
-                st.download_button(
-                    label="⬇ Stiahnuť vyčistené audio",
-                    data=f, file_name="clean_audio.wav",
-                    mime="audio/wav", use_container_width=True,
+            snr_before_val = result_classic["snr_before"]
+            snr_classic    = result_classic["snr_after"]
+            snr_diff_c     = round(snr_classic - snr_before_val, 2)
+
+            col_c, col_u = st.columns(2)
+
+            with col_c:
+                col_title("Klasický denoiser")
+                chips(
+                    Profil=result_classic["profile_used"],
+                    Noise=result_classic.get("noise_type", "—").capitalize(),
                 )
+                m1, m2, m3 = st.columns(3)
+                m1.metric("SNR pred", f"{snr_before_val} dB")
+                m2.metric("SNR po",   f"{snr_classic} dB")
+                m3.metric("Δ SNR",    f"{snr_diff_c:+.2f} dB",
+                          delta=f"{snr_diff_c:+.2f} dB", delta_color="normal")
 
-            with st.expander("🔬 Diagnostika – spektrogramy a metriky"):
-                show_diagnostics(input_path, output_path, result_denoise)
+                if abs(snr_diff_c) < 0.1:
+                    st.info("Neobsahuje merateľný šum.")
+                elif snr_diff_c > 0:
+                    st.success(f"Redukcia o {snr_diff_c} dB")
+                else:
+                    st.warning("Mierne zníženie kvality.")
+
+                st.audio(output_path, format="audio/wav")
+                with open(output_path, "rb") as f:
+                    st.download_button(
+                        "⬇ Stiahnuť (klasický)", data=f,
+                        file_name="clean_classic.wav", mime="audio/wav",
+                        use_container_width=True,
+                    )
+
+            with col_u:
+                col_title("U-Net denoiser")
+                if unet_denoiser is None:
+                    st.warning("U-Net model nie je dostupný.\n"
+                               "Skontroluj `Unet/models/best_model.pth`.")
+                elif unet_error:
+                    st.error(f"Chyba U-Net: {unet_error}")
+                else:
+                    snr_diff_u = round(unet_snr_after - snr_before_val, 2)
+                    chips(
+                        Sila=f"{unet_strength:.2f}",
+                        Chunk=f"{unet_chunk_seconds:.0f} s",
+                        Device=str(unet_denoiser.device),
+                    )
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("SNR pred", f"{snr_before_val} dB")
+                    m2.metric("SNR po",   f"{unet_snr_after} dB")
+                    m3.metric("Δ SNR",    f"{snr_diff_u:+.2f} dB",
+                              delta=f"{snr_diff_u:+.2f} dB", delta_color="normal")
+
+                    if abs(snr_diff_u) < 0.1:
+                        st.info("Neobsahuje merateľný šum.")
+                    elif snr_diff_u > 0:
+                        st.success(f"Redukcia o {snr_diff_u} dB")
+                    else:
+                        st.warning("Mierne zníženie kvality.")
+
+                    st.audio(unet_path, format="audio/wav")
+                    with open(unet_path, "rb") as f:
+                        st.download_button(
+                            "⬇ Stiahnuť (U-Net)", data=f,
+                            file_name="clean_unet.wav", mime="audio/wav",
+                            use_container_width=True,
+                        )
+
+            # ── Analytika – plná šírka, pod porovnaním ────────────────────
+            divider()
+            section("🔬", "Analytika – spektrogramy a metriky")
+
+            unet_ok = unet_denoiser is not None and unet_error is None and unet_snr_after is not None
+
+            if unet_ok:
+                tab_c, tab_u = st.tabs(["📊 Klasický denoiser", "🤖 U-Net denoiser"])
+                with tab_c:
+                    show_analysis_panel(input_path, output_path,
+                                        snr_before_val, snr_classic)
+                with tab_u:
+                    show_analysis_panel(input_path, unet_path,
+                                        snr_before_val, unet_snr_after)
+            else:
+                show_analysis_panel(input_path, output_path,
+                                    snr_before_val, snr_classic)
+
             divider()
 
+            # 4. Klasifikácia po denoising
             with st.spinner("Klasifikujem vyčistené audio..."):
                 try:
                     result_after = classify_genre(output_path)
@@ -387,7 +582,24 @@ if uploaded_file is not None:
                 col_title("Po denoising")
                 genre_bars(result_after["genres"])
 
-            for path in [input_path, output_path]:
+            # ── Textový súhrn parametrov ───────────────────────────────────
+            divider()
+            section("📋", "Súhrn parametrov")
+            note("Skopíruj a pošli na analýzu:")
+
+            summary = build_summary_text(
+                filename       = uploaded_file.name,
+                result_before  = result_before,
+                result_classic = result_classic,
+                result_after   = result_after,
+                unet_snr_after = unet_snr_after if unet_ok else None,
+                unet_strength  = unet_strength  if unet_ok else None,
+                unet_chunk     = unet_chunk_seconds if unet_ok else None,
+                unet_device    = str(unet_denoiser.device) if unet_ok else None,
+            )
+            st.code(summary, language=None)
+
+            for path in [input_path, output_path, unet_path]:
                 if os.path.exists(path):
                     os.remove(path)
 
@@ -403,21 +615,17 @@ if uploaded_file is not None:
             format_func=lambda x: {
                 "white":   "⬜ Biely šum – rovnomerné náhodné frekvencie",
                 "pink":    "🌸 Ružový šum – viac basov, prirodzenejší",
-                "crackle": "📻 Praskanie – ako stará vinylová platňa"
-            }[x]
+                "crackle": "📻 Praskanie – ako stará vinylová platňa",
+            }[x],
         )
 
         noise_level = st.slider(
             "Intenzita šumu",
-            min_value=0.01, max_value=0.10,
-            value=0.02, step=0.01,
-            help="0.01 = jemný šum | 0.05 = silný šum"
+            min_value=0.01, max_value=0.10, value=0.02, step=0.01,
+            help="0.01 = jemný šum | 0.05 = silný šum",
         )
 
-        chips(
-            Typ=noise_type.capitalize(),
-            Intenzita=f"{noise_level:.2f}",
-        )
+        chips(Typ=noise_type.capitalize(), Intenzita=f"{noise_level:.2f}")
         divider()
 
         if st.button("🔊 Zašumiť nahrávku", use_container_width=True, type="primary"):
@@ -434,7 +642,7 @@ if uploaded_file is not None:
             chips(
                 Typ=result_noise["noise_type"].capitalize(),
                 Intenzita=result_noise["noise_level"],
-                SNR=f"{result_noise['snr']:.2f} dB"
+                SNR=f"{result_noise['snr']:.2f} dB",
             )
             note("Čím nižšie SNR, tým viac šumu v nahrávke.")
             st.audio(noisy_path, format="audio/wav")

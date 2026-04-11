@@ -22,22 +22,67 @@ class DenoiseProfile:
     strength_high:     float   # >6 kHz   – najnižšia vždy
 
 
-# Pevné profily pre každý žáner (gate + strength per band)
-#              gate_db  ratio  att   rel     hp   s_lo  s_mid  s_hi
-#              gate_db  ratio  att   rel     hp   s_lo  s_mid  s_hi
+# Pevné profily pre každý žáner.
+# Poznámka: gate_* a highpass_hz parametre sú rezervované (NoiseGate je
+# odstránený z aktívnej pipeline). Reálne vplývajú len strength_low/mid/high.
+#
+# Frekvenčné pásma v pipeline (spectral.py):
+#   strength_low  → sub_bass (0–250 Hz) + bass_mid (250–2 kHz)
+#   strength_mid  → upper_mid (2–6 kHz)
+#   strength_high → highs (6–12 kHz) + air (12 kHz+, × 0.6)
+#
+#              gate_db  ratio  att   rel     hp    s_lo  s_mid  s_hi
 GENRE_PROFILES: dict[str, DenoiseProfile] = {
+
+    # Classical: ladiť konzervatívne — pianissimo pasáže, dlhé dozvuky,
+    # harmonické bohatstvo sláčikov a dychových nástrojov.
+    # Referenčné hodnoty z predchádzajúceho ladenia.
     "classical":  DenoiseProfile(-45, 3.0,  5.0, 200.0,  40, 0.72, 0.70, 0.65),
-    "jazz":       DenoiseProfile(-42, 3.5,  5.0, 150.0,  40, 0.72, 0.70, 0.65),
-    "rock":       DenoiseProfile(-38, 4.0,  3.0, 100.0,  60, 0.75, 0.73, 0.68),
-    "metal":      DenoiseProfile(-35, 5.0,  2.0,  80.0,  80, 0.78, 0.75, 0.70),
-    "pop":        DenoiseProfile(-40, 3.5,  5.0, 150.0,  40, 0.74, 0.72, 0.67),
-    "hiphop":     DenoiseProfile(-38, 4.0,  3.0, 100.0,  30, 0.75, 0.73, 0.68),
-    "electronic": DenoiseProfile(-36, 4.5,  2.0,  80.0,  30, 0.75, 0.73, 0.68),
-    "blues":      DenoiseProfile(-42, 3.0,  5.0, 200.0,  40, 0.72, 0.70, 0.65),
-    "country":    DenoiseProfile(-42, 3.0,  5.0, 150.0,  40, 0.72, 0.70, 0.65),
-    "reggae":     DenoiseProfile(-40, 3.5,  4.0, 120.0,  30, 0.73, 0.71, 0.66),
-    "disco":      DenoiseProfile(-38, 4.0,  3.0, 100.0,  40, 0.75, 0.73, 0.68),
-    "default":    DenoiseProfile(-40, 4.0,  4.0, 120.0,  40, 0.73, 0.71, 0.66),
+
+    # Jazz: podobný classical, ale činely (4–12 kHz) sú definujúce →
+    # nižší strength_high. Dlhší release pre piánové dozvuky.
+    "jazz":       DenoiseProfile(-44, 3.0,  5.0, 180.0,  40, 0.70, 0.68, 0.60),
+
+    # Rock: elektrická gitara má bohaté harmoniky v mid-pásme (1–5 kHz) →
+    # nižší strength_mid oproti pôvodnému 0.73. Basová gitara začína ~41 Hz.
+    "rock":       DenoiseProfile(-38, 4.0,  3.0, 120.0,  50, 0.74, 0.70, 0.67),
+
+    # Metal: extrémne husté harmonické spektrum (skreslené gitary do 8+ kHz) →
+    # príliš agresívne filtrovanie ničí "wall of sound". Zníženie z 0.78/0.75.
+    "metal":      DenoiseProfile(-35, 5.0,  2.0,  80.0,  60, 0.74, 0.72, 0.70),
+
+    # Pop: spracované nahrávky, hlas v 200–3 000 Hz je kritický →
+    # miernejší strength_mid pre zachovanie vokálnej zrozumiteľnosti.
+    "pop":        DenoiseProfile(-40, 3.5,  5.0, 150.0,  40, 0.73, 0.70, 0.66),
+
+    # Hip-hop: sub-bas a 808 (40–80 Hz) sú žánrovo definujúce →
+    # strength_low znížený z 0.75 na 0.65, aby denoiser neoškriabal bas.
+    # Dlhší release pre vokálne pasáže.
+    "hiphop":     DenoiseProfile(-40, 4.0,  3.0, 150.0,  30, 0.65, 0.72, 0.67),
+
+    # Electronic: syntetizátorové pady a textúry obsahujú úmyselný šum
+    # (biely šum v padoch, vzduch v syntézach) — príliš agresívne filtrovanie
+    # ničí zvukový dizajn. Zníženie všetkých pásiem.
+    "electronic": DenoiseProfile(-36, 4.5,  2.0,  80.0,  30, 0.68, 0.68, 0.63),
+
+    # Blues: gitarové slides a bends potrebujú sustain, harmonika má harmoniky
+    # vo vysokom mid-pásme. Miernejší ako classical, menej ako rock.
+    "blues":      DenoiseProfile(-43, 3.0,  5.0, 180.0,  40, 0.70, 0.68, 0.62),
+
+    # Country: akustická gitara, husle, banjo (dôležité vysoké harmoniky) →
+    # miernejší strength_high oproti classical pre zachovanie jasnosti tónov.
+    "country":    DenoiseProfile(-42, 3.0,  5.0, 160.0,  40, 0.71, 0.69, 0.63),
+
+    # Reggae: basová linka (40–120 Hz) je melodickým základom žánru →
+    # strength_low znížený z 0.73 na 0.65. Dlhší release pre sustain nôt.
+    "reggae":     DenoiseProfile(-40, 3.5,  4.0, 160.0,  30, 0.65, 0.70, 0.64),
+
+    # Disco: štyri činely na každý takt (8–12 kHz) a sláčiková sekcia →
+    # strength_high znížený z 0.68 na 0.62 pre zachovanie shimmer.
+    "disco":      DenoiseProfile(-38, 4.0,  3.0, 120.0,  40, 0.74, 0.72, 0.62),
+
+    # Default: vyvážená základňa pre neznámy žáner.
+    "default":    DenoiseProfile(-40, 4.0,  4.0, 120.0,  40, 0.72, 0.70, 0.65),
 }
 
 
