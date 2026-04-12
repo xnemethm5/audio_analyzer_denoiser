@@ -57,16 +57,16 @@ GENRE_PROFILES: dict[str, DenoiseProfile] = {
     "country":    DenoiseProfile(-42, 3.0,  5.0, 160.0,  40, 0.71, 0.69, 0.63, 0.98, 0.4, 2.5, 32.0, 0.02),
 
     # Reggae: basová linka (40–120 Hz) je melodickým základom
-    "reggae":     DenoiseProfile(-40, 3.5,  4.0, 160.0,  30, 0.65, 0.70, 0.64, 0.98, 0.4, 2.5, 32.0, 0.02),
+    "reggae":     DenoiseProfile(-40, 3.5,  4.0, 160.0,  30, 0.70, 0.72, 0.65, 0.98, 0.4, 2.5, 32.0, 0.02),
 
     # Rock: elektrická gitara, bicie – dynamické zmeny
-    "rock":       DenoiseProfile(-38, 4.0,  3.0, 120.0,  50, 0.74, 0.70, 0.67, 0.96, 0.3, 2.8, 25.0, 0.02),
+    "rock":       DenoiseProfile(-38, 4.0,  3.0, 120.0,  50, 0.74, 0.70, 0.67, 0.96, 0.3, 2.8, 25.0, 0.01),
 
     # Hip-hop: sub-bas a 808 (40–80 Hz) definujúce – strength_low nižší
-    "hiphop":     DenoiseProfile(-40, 4.0,  3.0, 150.0,  30, 0.65, 0.72, 0.67, 0.96, 0.3, 2.8, 25.0, 0.02),
+    "hiphop":     DenoiseProfile(-40, 4.0,  3.0, 150.0,  30, 0.70, 0.74, 0.68, 0.96, 0.3, 3.0, 25.0, 0.01),
 
     # Disco: činely na každý takt, sláčiková sekcia
-    "disco":      DenoiseProfile(-38, 4.0,  3.0, 120.0,  40, 0.74, 0.72, 0.62, 0.96, 0.3, 2.8, 25.0, 0.02),
+    "disco":      DenoiseProfile(-38, 4.0,  3.0, 120.0,  40, 0.74, 0.72, 0.62, 0.96, 0.3, 2.8, 25.0, 0.01),
 
     # Metal: husté harmonické spektrum, rýchle transienty
     "metal":      DenoiseProfile(-35, 5.0,  2.0,  80.0,  60, 0.74, 0.72, 0.70, 0.94, 0.2, 3.0, 20.0, 0.02),
@@ -152,9 +152,9 @@ def adapt_profile(
     if slope > -0.5:
         hi_boost   = min(0.30, (0.5 - slope) * 0.25)
         s_hi       = min(s_hi  + hi_boost,       0.90)
-        s_mid      = min(s_mid + hi_boost * 0.6, 0.90)
-        s_lo       = min(s_lo  + hi_boost * 0.3, 0.90)
-        bias       = min(bias  + 1.0,             5.0)   # stacionárny → vyšší bias
+        s_mid      = min(s_mid + hi_boost * 0.8, 0.90)
+        s_lo       = min(s_lo  + hi_boost * 0.7, 0.90)  # biely šum je aj v basoch!
+        bias       = min(bias  + 1.2,             5.0)   # stacionárny → vyšší bias
         window_sec = min(window_sec + 0.2,        1.0)
         n_fft_ms   = min(n_fft_ms   + 10.0,       50.0)  # lepšie frekv. rozlíšenie
 

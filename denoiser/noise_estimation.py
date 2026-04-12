@@ -48,7 +48,23 @@ def detect_noise_type(y: np.ndarray, sr: int) -> tuple[str, dict]:
     Spektrálny sklon sa meria len z tichých úsekov (RMS < 40 % priemeru)
     aby hudobné basy neskreslili výsledok do záporných hodnôt.
     """
-    kurt     = float(scipy.stats.kurtosis(y))
+    # Kurtosis meriame z high-pass filtrovaného signálu (>4kHz) –
+    # hudba má tam málo energie, crackle impulzy tam vynikajú.
+    # Na celom signáli je kurtosis hudbou príliš dilutovaný.
+    from scipy.signal import butter, filtfilt
+    nyq = sr / 2.0
+    if nyq > 4500:
+        b, a  = butter(4, 4000 / nyq, btype='high')
+        y_hp  = filtfilt(b, a, y.astype(np.float64)).astype(np.float32)
+    else:
+        y_hp  = y
+    kurt     = float(scipy.stats.kurtosis(y_hp))
+
+    # Crest factor – pomer peak k RMS, crackle ho výrazne zvyšuje
+    rms_y    = float(np.sqrt(np.mean(y ** 2))) + 1e-10
+    peak_y   = float(np.max(np.abs(y)))
+    crest_db = 20 * np.log10(peak_y / rms_y + 1e-10)
+
     flatness = float(np.mean(librosa.feature.spectral_flatness(y=y)))
     block    = int(sr * 0.5)
 
@@ -77,14 +93,23 @@ def detect_noise_type(y: np.ndarray, sr: int) -> tuple[str, dict]:
     else:
         slope = 0.0
 
-    # Hudba prirodzene mení hlasitosť → rms_cv 0.2–0.4 je normálne
-    # Skutočný nestacionárny šum má rms_cv > 0.5
-    noise_cv = max(rms_cv - 0.25, 0.0)
+    # Hudba prirodzene mení hlasitosť → odčítame hudobnú variabilitu,
+    # ale len malú časť (0.10) aby sme nestlačili nonstationary príliš.
+    # Skutočný nestacionárny šum (vietor, kroky) má rms_cv > 0.35.
+    noise_cv = max(rms_cv - 0.10, 0.0)
+
+    # Impulsive skóre kombinuje:
+    #   - kurtosis HP signálu (crackle spôsobuje špičky vo výškach)
+    #   - crest factor (crackle výrazne zvyšuje peak/RMS pomer)
+    # Crest factor > 20 dB = podozrenie na impulzy (hudba má typicky 10–18 dB)
+    crest_score   = min(max((crest_db - 18.0) / 10.0, 0.0), 1.0)
+    kurtosis_score = min(max((kurt - 3.0) / 12.0, 0.0), 1.0)
+    impulsive_score = max(crest_score, kurtosis_score)
 
     scores = {
-        "impulsive":     min(max((kurt - 5.0) / 20.0, 0.0), 1.0),
-        "stationary":    min(max(flatness * 2.0, 0.0), 1.0) * (1.0 - min(noise_cv * 2, 1.0)),
-        "nonstationary": min(noise_cv * 2, 1.0),
+        "impulsive":     impulsive_score,
+        "stationary":    min(max(flatness * 2.0, 0.0), 1.0) * (1.0 - min(noise_cv, 1.0)),
+        "nonstationary": min(noise_cv, 1.0),
     }
     dominant = max(scores, key=scores.get)
     scores["spectral_slope"] = slope

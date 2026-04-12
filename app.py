@@ -284,14 +284,15 @@ def show_analysis_panel(input_path: str, output_path: str,
 # ── Textový súhrn výsledkov ────────────────────────────────────────────────────
 
 def build_summary_text(
-    filename:       str,
-    result_before:  dict,
-    result_classic: dict,
-    result_after:   dict,
-    unet_snr_after: float | None,
-    unet_strength:  float | None,
-    unet_chunk:     float | None,
-    unet_device:    str   | None,
+    filename:             str,
+    result_before:        dict,
+    result_classic:       dict,
+    result_after_classic: dict,
+    result_after_unet:    dict | None,
+    unet_snr_after:       float | None,
+    unet_strength:        float | None,
+    unet_chunk:           float | None,
+    unet_device:          str   | None,
 ) -> str:
     """
     Zostaví plain-text súhrn všetkých výstupných parametrov jedného behu.
@@ -341,10 +342,19 @@ def build_summary_text(
         lines.append("  (nedostupný)")
     lines.append("")
 
-    # ── Klasifikácia po denoising ─────────────────────────
-    lines.append("── Klasifikácia po denoising ────────────────────────")
-    for i, g in enumerate(result_after["genres"], 1):
+    # ── Klasifikácia po klasickom denoising ───────────────
+    lines.append("── Klasifikácia po klasickom denoising ─────────────")
+    for i, g in enumerate(result_after_classic["genres"], 1):
         lines.append(f"  {i}. {g['genre'].capitalize():<14} {g['probability']:.1f} %")
+    lines.append("")
+
+    # ── Klasifikácia po U-Net denoising ───────────────────
+    lines.append("── Klasifikácia po U-Net denoising ─────────────────")
+    if result_after_unet is not None:
+        for i, g in enumerate(result_after_unet["genres"], 1):
+            lines.append(f"  {i}. {g['genre'].capitalize():<14} {g['probability']:.1f} %")
+    else:
+        lines.append("  (U-Net nedostupný)")
     lines.append("")
     lines.append(sep)
 
@@ -565,22 +575,42 @@ if uploaded_file is not None:
 
             divider()
 
-            # 4. Klasifikácia po denoising
-            with st.spinner("Klasifikujem vyčistené audio..."):
+            # 4. Klasifikácia po denoising – zvlášť pre každý denoiser
+            with st.spinner("Klasifikujem výstupy..."):
                 try:
-                    result_after = classify_genre(output_path)
+                    result_after_classic = classify_genre(output_path)
                 except Exception as e:
-                    st.error(f"Chyba pri klasifikácii po denoising: {e}")
+                    st.error(f"Chyba pri klasifikácii (klasický): {e}")
                     st.stop()
 
+                result_after_unet = None
+                if unet_ok:
+                    try:
+                        result_after_unet = classify_genre(unet_path)
+                    except Exception as e:
+                        st.warning(f"Klasifikácia U-Net zlyhala: {e}")
+
             section("📊", "Porovnanie klasifikácie")
-            col1, col2 = st.columns(2)
-            with col1:
-                col_title("Pred denoisingom")
-                genre_bars(result_before["genres"])
-            with col2:
-                col_title("Po denoising")
-                genre_bars(result_after["genres"])
+
+            if unet_ok and result_after_unet is not None:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    col_title("Pred denoisingom")
+                    genre_bars(result_before["genres"])
+                with col2:
+                    col_title("Po klasickom denoising")
+                    genre_bars(result_after_classic["genres"])
+                with col3:
+                    col_title("Po U-Net denoising")
+                    genre_bars(result_after_unet["genres"])
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    col_title("Pred denoisingom")
+                    genre_bars(result_before["genres"])
+                with col2:
+                    col_title("Po klasickom denoising")
+                    genre_bars(result_after_classic["genres"])
 
             # ── Textový súhrn parametrov ───────────────────────────────────
             divider()
@@ -588,14 +618,15 @@ if uploaded_file is not None:
             note("Skopíruj a pošli na analýzu:")
 
             summary = build_summary_text(
-                filename       = uploaded_file.name,
-                result_before  = result_before,
-                result_classic = result_classic,
-                result_after   = result_after,
-                unet_snr_after = unet_snr_after if unet_ok else None,
-                unet_strength  = unet_strength  if unet_ok else None,
-                unet_chunk     = unet_chunk_seconds if unet_ok else None,
-                unet_device    = str(unet_denoiser.device) if unet_ok else None,
+                filename             = uploaded_file.name,
+                result_before        = result_before,
+                result_classic       = result_classic,
+                result_after_classic = result_after_classic,
+                result_after_unet    = result_after_unet,
+                unet_snr_after       = unet_snr_after if unet_ok else None,
+                unet_strength        = unet_strength  if unet_ok else None,
+                unet_chunk           = unet_chunk_seconds if unet_ok else None,
+                unet_device          = str(unet_denoiser.device) if unet_ok else None,
             )
             st.code(summary, language=None)
 

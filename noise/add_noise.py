@@ -52,6 +52,10 @@ def add_noise(input_path, output_path, noise_type="white", noise_level=0.02):
         freqs = np.fft.rfftfreq(len(y))
         freqs[0] = 1e-10
         fft_pink = fft * (1 / np.sqrt(freqs))
+        # DC bin (0 Hz) by mal byť nulový – ružový šum nemá DC offset.
+        # Bez tohto riadku 1/sqrt(1e-10) ≈ 31 623 amplifikuje DC komponent
+        # a spôsobuje viditeľný posun waveformu nahor.
+        fft_pink[0] = 0.0
         noise    = np.fft.irfft(fft_pink, n=len(y)).astype(np.float32)
         noise    = noise / noise.std() * noise_level
 
