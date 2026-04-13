@@ -642,11 +642,17 @@ if uploaded_file is not None:
 
         noise_type = st.selectbox(
             "Typ šumu",
-            options=["white", "pink", "crackle"],
+            options=["white", "pink", "brown", "hiss", "hum",
+                     "crackle", "clicks", "vinyl"],
             format_func=lambda x: {
                 "white":   "⬜ Biely šum – rovnomerné náhodné frekvencie",
-                "pink":    "🌸 Ružový šum – viac basov, prirodzenejší",
-                "crackle": "📻 Praskanie – ako stará vinylová platňa",
+                "pink":    "🌸 Ružový šum – 1/f, prirodzenejší",
+                "brown":   "🟤 Hnedý šum – hlboký rumble (1/f²)",
+                "hiss":    "🎞️ Tape hiss – vysokofrekvenčný, ako stará páska",
+                "hum":     "⚡ Sieťový hum – 50 Hz + harmonické",
+                "crackle": "📻 Praskanie – husté drobné impulzy",
+                "clicks":  "💥 Kliknutia – zriedkavé výrazné škrabance",
+                "vinyl":   "🎵 Vinyl – pink + rumble + crackle (realistické)",
             }[x],
         )
 

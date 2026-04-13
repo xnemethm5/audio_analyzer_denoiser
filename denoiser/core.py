@@ -23,6 +23,32 @@ from .spectral import spectral_pass
 from .filters import declick_lsar_sr
 
 
+def _dc_block(y: np.ndarray, sr: int, cutoff_hz: float = 20.0) -> np.ndarray:
+    """
+    Jednopólový IIR high-pass filter na odstránenie DC offsetu a sub-sonic rumble.
+
+    Pink a hnedý šum majú veľa energie pod 40 Hz a po filtrovaní sub-bass
+    pásma môže v signáli zostať asymetrický reziduál s non-zero priemerom,
+    čo sa prejaví ako "posunutá" waveform.
+
+    20 Hz cutoff je pod hranicou počuteľnosti, takže odstránenie je
+    transparentné. Filter sa aplikuje per kanál pre stereo signály.
+
+    Rovnica: y[n] = x[n] - x[n-1] + R * y[n-1]
+    kde R = exp(-2π * cutoff / sr) ≈ 0.997 pre 20 Hz @ 44.1 kHz.
+    """
+    R = float(np.exp(-2.0 * np.pi * cutoff_hz / sr))
+
+    def _filter_1d(x: np.ndarray) -> np.ndarray:
+        # scipy.signal.lfilter forma: b = [1, -1], a = [1, -R]
+        from scipy.signal import lfilter
+        return lfilter([1.0, -1.0], [1.0, -R], x).astype(np.float32)
+
+    if y.ndim == 1:
+        return _filter_1d(y)
+    return np.stack([_filter_1d(y[:, ch]) for ch in range(y.shape[1])], axis=1)
+
+
 def _peak_normalize(y: np.ndarray, target_db: float = -1.0) -> np.ndarray:
     """Peak normalizácia na -1 dBFS. Gain <= 1.0 – nikdy nezosilňuje."""
     peak          = float(np.max(np.abs(y))) + 1e-10
@@ -114,6 +140,7 @@ def denoise_audio(
         noise_type = results[0][1]
         applied    = results[0][2]
 
+    y_clean = _dc_block(y_clean, sr, cutoff_hz=20.0)
     y_clean = _peak_normalize(y_clean, target_db=-1.0)
 
     clean_mono = y_clean if y_clean.ndim == 1 else y_clean.mean(axis=1)

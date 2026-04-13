@@ -195,15 +195,19 @@ def detect_noise_type(y: np.ndarray, sr: int) -> tuple[str, dict]:
     """
     Klasifikuje typ šumu: impulsive / stationary / nonstationary.
 
-    Impulsive detection: high-pass filtrovaná kurtosis + crest factor.
-    Hudba má HP kurtosis ≈ 3 (gaussovská) a crest 10–18 dB; crackle
-    zvyšuje oboje.
+    Rozhodovacia logika (opravená):
+      1. Ak impulsive_score > 0.30 → impulsive (clicks/crackle)
+      2. Inak porovnanie stationary vs nonstationary cez rms_cv
+         (ak je variabilita RMS medzi blokmi nízka → stacionárny šum)
 
-    Spectral slope sa meria len z tichých úsekov aby hudobné basy
-    neskreslili výsledok do záporných hodnôt.
+    Impulsive detection: HP kurtosis + crest factor.
+    Flatness A slope sa merajú len z TICHÝCH úsekov, aby hudobné basy
+    neskreslili výsledok (predtým flatness bola z celého signálu, čo
+    dávalo umelo nízke skóre stationary pre hudbu + stacionárny šum).
     """
-    # Kurtosis z high-pass filtrovaného signálu (>4 kHz)
     from scipy.signal import butter, filtfilt
+
+    # --- Impulsive features ---
     nyq = sr / 2.0
     if nyq > 4500:
         b, a = butter(4, 4000 / nyq, btype="high")
@@ -212,28 +216,37 @@ def detect_noise_type(y: np.ndarray, sr: int) -> tuple[str, dict]:
         y_hp = y
     kurt = float(scipy.stats.kurtosis(y_hp))
 
-    # Crest factor
     rms_y    = float(np.sqrt(np.mean(y ** 2))) + 1e-10
     peak_y   = float(np.max(np.abs(y)))
     crest_db = 20 * np.log10(peak_y / rms_y + 1e-10)
 
-    flatness = float(np.mean(librosa.feature.spectral_flatness(y=y)))
-    block    = int(sr * 0.5)
+    crest_score    = min(max((crest_db - 18.0) / 10.0, 0.0), 1.0)
+    kurtosis_score = min(max((kurt - 3.0) / 12.0, 0.0), 1.0)
+    impulsive_score = max(crest_score, kurtosis_score)
+
+    # --- Rozdelenie na tiché a hlasné úseky ---
+    block   = int(sr * 0.5)
+    rms_all = float(np.sqrt(np.mean(y ** 2)))
 
     rms_blocks = [
         float(np.sqrt(np.mean(y[i : i + block] ** 2)))
         for i in range(0, len(y) - block, block)
     ]
-    rms_cv  = float(np.std(rms_blocks) / (np.mean(rms_blocks) + 1e-10))
-    rms_all = float(np.sqrt(np.mean(y ** 2)))
+    rms_cv = float(np.std(rms_blocks) / (np.mean(rms_blocks) + 1e-10))
 
-    # Slope len z tichých úsekov
     quiet_segs = [
         y[i : i + block]
         for i in range(0, len(y) - block, block)
         if np.sqrt(np.mean(y[i : i + block] ** 2)) < rms_all * 0.4
     ]
-    y_ref    = np.concatenate(quiet_segs) if quiet_segs else y
+    y_ref = np.concatenate(quiet_segs) if quiet_segs else y
+
+    # Flatness z tichých úsekov – tam dominuje šum, nie hudba.
+    # Predtým sa počítala z celého signálu a pre hudbu + šum bola
+    # vždy nízka (~0.05), takže stationary score bolo umelo potlačené.
+    flatness_quiet = float(np.mean(librosa.feature.spectral_flatness(y=y_ref)))
+
+    # Spektrálny sklon takisto z tichých úsekov
     fft_mag  = np.abs(np.fft.rfft(y_ref))
     fft_freq = np.fft.rfftfreq(len(y_ref), 1.0 / sr)
     valid    = fft_freq > 200
@@ -245,19 +258,39 @@ def detect_noise_type(y: np.ndarray, sr: int) -> tuple[str, dict]:
     else:
         slope = 0.0
 
-    # Odčítanie hudobnej variability z nonstationary skóre
+    # Odčítanie prirodzenej hudobnej variability z nonstationary skóre
     noise_cv = max(rms_cv - 0.10, 0.0)
 
-    # Impulsive skóre = max(crest, kurtosis)
-    crest_score    = min(max((crest_db - 18.0) / 10.0, 0.0), 1.0)
-    kurtosis_score = min(max((kurt - 3.0) / 12.0, 0.0), 1.0)
-    impulsive_score = max(crest_score, kurtosis_score)
+    # Stationary skóre: flatness z tichých úsekov × (1 - variabilita)
+    # Flatness biely šum ≈ 0.6–0.9, ružový ≈ 0.3–0.5, hudba ≈ 0.02–0.08.
+    # Škálujeme × 3 aby stacionárny šum dal skóre blízke 1.0.
+    stationary_score = min(max(flatness_quiet * 3.0, 0.0), 1.0) * \
+                       (1.0 - min(noise_cv, 1.0))
 
     scores = {
         "impulsive":     impulsive_score,
-        "stationary":    min(max(flatness * 2.0, 0.0), 1.0) * (1.0 - min(noise_cv, 1.0)),
+        "stationary":    stationary_score,
         "nonstationary": min(noise_cv, 1.0),
     }
-    dominant = max(scores, key=scores.get)
+
+    # --- Rozhodovacia logika ---
+    # Priority (zhora):
+    #   1. impulsive_score > 0.30  → clicks/crackle
+    #   2. nonstat_score   > 0.35  → bursty / nestacionárny šum (vietor, kroky)
+    #   3. inak                    → stationary (hiss, pink, white, rumble)
+    #
+    # Prahy sú volené tak, aby "stationary" bol default pre stabilný šum
+    # (pink, white, hiss), ktorý má nízke rms_cv – typicky < 0.30. Reálne
+    # nestacionárne javy (vietor, bursty) majú rms_cv >> 0.45.
+    nonstat_score = scores["nonstationary"]
+
+    if impulsive_score > 0.30:
+        dominant = "impulsive"
+    elif nonstat_score > 0.35:
+        dominant = "nonstationary"
+    else:
+        dominant = "stationary"
+
     scores["spectral_slope"] = slope
+    scores["flatness_quiet"] = flatness_quiet
     return dominant, scores
