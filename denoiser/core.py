@@ -1,15 +1,10 @@
 """
 core.py – Hlavná denoising pipeline.
-
-Zmeny oproti pôvodnej verzii:
-  - declick volanie ide cez declick_lsar_sr(y, sr), ktorý má správny sample rate
-    (pôvodné remove_impulses používalo globálne std, ktoré nefungovalo)
-  - snr_before/after sa teraz počíta zo skutočného SNR (minimum statistics),
-    nie dynamického rozsahu → SNR_CLEAN_THRESHOLD_DB je reálne použiteľný
 """
 
 import numpy as np
 import soundfile as sf
+import scipy.signal
 
 from .profiles import get_profile, adapt_profile
 from .noise_estimation import (
@@ -17,7 +12,6 @@ from .noise_estimation import (
     snr_scale,
     detect_noise_type,
     SNR_CLEAN_THRESHOLD_DB,
-    DIAG_MODE,
 )
 from .spectral import spectral_pass
 from .filters import declick_lsar_sr
@@ -25,24 +19,15 @@ from .filters import declick_lsar_sr
 
 def _dc_block(y: np.ndarray, sr: int, cutoff_hz: float = 20.0) -> np.ndarray:
     """
-    Jednopólový IIR high-pass filter na odstránenie DC offsetu a sub-sonic rumble.
-
-    Pink a hnedý šum majú veľa energie pod 40 Hz a po filtrovaní sub-bass
-    pásma môže v signáli zostať asymetrický reziduál s non-zero priemerom,
-    čo sa prejaví ako "posunutá" waveform.
-
-    20 Hz cutoff je pod hranicou počuteľnosti, takže odstránenie je
-    transparentné. Filter sa aplikuje per kanál pre stereo signály.
-
+    Jednopólový IIR high-pass filter na odstránenie DC offsetu.
     Rovnica: y[n] = x[n] - x[n-1] + R * y[n-1]
-    kde R = exp(-2π * cutoff / sr) ≈ 0.997 pre 20 Hz @ 44.1 kHz.
+    kde R = exp(-2π · cutoff / sr) ≈ 0.997 pre 20 Hz @ 44.1 kHz.
+    20 Hz je pod hranicou počuteľnosti, odstránenie je transparentné.
     """
     R = float(np.exp(-2.0 * np.pi * cutoff_hz / sr))
 
     def _filter_1d(x: np.ndarray) -> np.ndarray:
-        # scipy.signal.lfilter forma: b = [1, -1], a = [1, -R]
-        from scipy.signal import lfilter
-        return lfilter([1.0, -1.0], [1.0, -R], x).astype(np.float32)
+        return scipy.signal.lfilter([1.0, -1.0], [1.0, -R], x).astype(np.float32)
 
     if y.ndim == 1:
         return _filter_1d(y)
@@ -66,22 +51,11 @@ def _process_channel(
     noise_type, scores = detect_noise_type(y, sr)
     applied: list[str] = []
 
-    if DIAG_MODE == "bypass":
-        return y, noise_type, ["DIAG:bypass"]
+    # Čistý signál – preskočíme denoising
+    if global_snr_db >= SNR_CLEAN_THRESHOLD_DB:
+        return y, noise_type, [f"skipped(clean-signal, snr={global_snr_db:.1f}dB)"]
 
-    if DIAG_MODE == "aggressive":
-        from .profiles import DenoiseProfile
-        profile = DenoiseProfile(
-            gate_threshold_db=-30, gate_ratio=5.0,
-            gate_attack_ms=2.0,    gate_release_ms=80.0,
-            highpass_hz=40,
-            strength_low=1.20, strength_mid=1.20, strength_high=1.15,
-        )
-    else:
-        if global_snr_db >= SNR_CLEAN_THRESHOLD_DB:
-            return y, noise_type, [f"skipped(clean-signal, snr={global_snr_db:.1f}dB)"]
-
-    # Dynamická úprava všetkých parametrov podľa šumu aj žánru
+    # Dynamická úprava parametrov podľa žánru + detekovaného šumu
     profile = adapt_profile(profile, scores)
     applied.append(
         f"profile-adapted("
@@ -94,26 +68,22 @@ def _process_channel(
         f"floor={profile.mask_floor})"
     )
 
-    # --- Declick / decrackle FIRST ---
-    # Odstránime impulzné šumy pred spektrálnym prechodom. Toto je dôležité
-    # lebo clicks sú širokopásmové a inak by rozmazali odhad šumu a kazili
-    # by sa aj transienty v MMSE-LSA.
+    # --- Declick / decrackle PRED spektrálnym prechodom ---
+    # Clicks sú širokopásmové, inak by rozmazali odhad šumu a kazili
+    # transienty v MMSE-LSA.
     if scores["impulsive"] > 0.2:
         y, n_fixed = declick_lsar_sr(y, sr)
         applied.append(f"declick-lsar(fixed={n_fixed})")
-        # Po declicku prepočítame SNR – bez clickov je signál zvyčajne
-        # oveľa čistejší a pôvodný global_snr_db by pretlačil filter.
+        # Po declicku prepočítame SNR – signál je zvyčajne oveľa čistejší
         effective_snr = estimate_snr(y, sr)
     else:
         effective_snr = global_snr_db
 
-    # Scale pre MMSE-LSA strength – používame efektívne SNR (po declicku)
-    if noise_type == "stationary":
-        scale = 1.0
-    else:
-        scale = snr_scale(effective_snr)
+    # Scale pre MMSE-LSA – pri stacionárnom šume ideme plnou silou,
+    # pri nestacionárnom dáva sigmoid podľa SNR
+    scale = 1.0 if noise_type == "stationary" else snr_scale(effective_snr)
 
-    y, _, src = spectral_pass(y, sr, profile, snr_scale_factor=scale)
+    y, src = spectral_pass(y, sr, profile, snr_scale_factor=scale)
     applied.append(f"multiband-mmse[{src}]")
 
     return y, noise_type, applied
@@ -135,7 +105,8 @@ def denoise_audio(
     if y.ndim == 1:
         y_clean, noise_type, applied = _process_channel(y, sr, profile, snr_before)
     else:
-        results    = [_process_channel(y[:, ch], sr, profile, snr_before) for ch in range(y.shape[1])]
+        results    = [_process_channel(y[:, ch], sr, profile, snr_before)
+                      for ch in range(y.shape[1])]
         y_clean    = np.stack([r[0] for r in results], axis=1)
         noise_type = results[0][1]
         applied    = results[0][2]

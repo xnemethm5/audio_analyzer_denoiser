@@ -20,27 +20,7 @@ import soundfile as sf
 import argparse
 import os
 
-
-# SNR meranie – importujeme z denoiser modulu pre konzistenciu.
-# Fallback na jednoduchý dynamic-range odhad ak denoiser nie je dostupný
-# (napr. pri spúšťaní skriptu samostatne mimo projektovej štruktúry).
-try:
-    from denoiser.noise_estimation import estimate_snr as _estimate_snr
-except ImportError:
-    def _estimate_snr(y, sr):
-        window = int(sr * 0.5)
-        if len(y) < window:
-            window = max(1, len(y))
-        step      = max(window // 2, 1)
-        min_var   = float("inf")
-        noise_var = float(np.var(y)) + 1e-10
-        for start in range(0, max(1, len(y) - window), step):
-            v = float(np.var(y[start : start + window]))
-            if v < min_var:
-                min_var   = v
-                noise_var = max(v, 1e-10)
-        signal_var = float(np.var(y)) + 1e-10
-        return 10.0 * np.log10(signal_var / noise_var)
+from denoiser.noise_estimation import estimate_snr as _estimate_snr
 
 
 # ==============================================================================
