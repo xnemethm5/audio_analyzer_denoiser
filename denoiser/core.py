@@ -1,27 +1,33 @@
 """
 core.py – Hlavná denoising pipeline.
 
-Odstránené (degradujú zvuk):
-  - Kalmanov filter v časovej oblasti
-  - 2. STFT prechod
-  - Pedalboard NoiseGate
-  - RMS normalizácia
+Zmeny oproti pôvodnej verzii:
+  - declick volanie ide cez declick_lsar_sr(y, sr), ktorý má správny sample rate
+    (pôvodné remove_impulses používalo globálne std, ktoré nefungovalo)
+  - snr_before/after sa teraz počíta zo skutočného SNR (minimum statistics),
+    nie dynamického rozsahu → SNR_CLEAN_THRESHOLD_DB je reálne použiteľný
 """
 
 import numpy as np
 import soundfile as sf
 
 from .profiles import get_profile, adapt_profile
-from .noise_estimation import estimate_snr, snr_scale, detect_noise_type, SNR_CLEAN_THRESHOLD_DB, DIAG_MODE
+from .noise_estimation import (
+    estimate_snr,
+    snr_scale,
+    detect_noise_type,
+    SNR_CLEAN_THRESHOLD_DB,
+    DIAG_MODE,
+)
 from .spectral import spectral_pass
-from .filters import remove_impulses
+from .filters import declick_lsar_sr
 
 
 def _peak_normalize(y: np.ndarray, target_db: float = -1.0) -> np.ndarray:
     """Peak normalizácia na -1 dBFS. Gain <= 1.0 – nikdy nezosilňuje."""
-    peak = float(np.max(np.abs(y))) + 1e-10
+    peak          = float(np.max(np.abs(y))) + 1e-10
     target_linear = 10 ** (target_db / 20.0)
-    gain = min(target_linear / peak, 1.0)
+    gain          = min(target_linear / peak, 1.0)
     return (y * gain).astype(np.float32)
 
 
@@ -43,34 +49,43 @@ def _process_channel(
             gate_threshold_db=-30, gate_ratio=5.0,
             gate_attack_ms=2.0,    gate_release_ms=80.0,
             highpass_hz=40,
-            strength_low=0.90, strength_mid=0.90, strength_high=0.85,
+            strength_low=1.20, strength_mid=1.20, strength_high=1.15,
         )
     else:
         if global_snr_db >= SNR_CLEAN_THRESHOLD_DB:
-            return y, noise_type, ["skipped(clean-signal)"]
+            return y, noise_type, [f"skipped(clean-signal, snr={global_snr_db:.1f}dB)"]
 
-    # Dynamická úprava VŠETKÝCH parametrov podľa šumu aj žánru
+    # Dynamická úprava všetkých parametrov podľa šumu aj žánru
     profile = adapt_profile(profile, scores)
     applied.append(
         f"profile-adapted("
         f"slope={scores.get('spectral_slope', 0):.2f},"
         f"imp={scores['impulsive']:.2f},"
         f"nonstat={scores['nonstationary']:.2f} | "
+        f"s_lo={profile.strength_low},s_mid={profile.strength_mid},s_hi={profile.strength_high},"
         f"α={profile.alpha_ns},win={profile.window_sec}s,"
         f"bias={profile.bias},fft={profile.n_fft_ms}ms,"
         f"floor={profile.mask_floor})"
     )
 
+    # --- Declick / decrackle FIRST ---
+    # Odstránime impulzné šumy pred spektrálnym prechodom. Toto je dôležité
+    # lebo clicks sú širokopásmové a inak by rozmazali odhad šumu a kazili
+    # by sa aj transienty v MMSE-LSA.
     if scores["impulsive"] > 0.2:
-        y = remove_impulses(y, threshold_sigma=4.0)
-        applied.append("impulse-filter")
+        y, n_fixed = declick_lsar_sr(y, sr)
+        applied.append(f"declick-lsar(fixed={n_fixed})")
+        # Po declicku prepočítame SNR – bez clickov je signál zvyčajne
+        # oveľa čistejší a pôvodný global_snr_db by pretlačil filter.
+        effective_snr = estimate_snr(y, sr)
+    else:
+        effective_snr = global_snr_db
 
-    # Pre stacionárny šum scale=1.0 – snr_scale zbytočne oslabuje filtrovanie
-    # keď minimum statistics už správne odhadol šum
+    # Scale pre MMSE-LSA strength – používame efektívne SNR (po declicku)
     if noise_type == "stationary":
         scale = 1.0
     else:
-        scale = snr_scale(global_snr_db)
+        scale = snr_scale(effective_snr)
 
     y, _, src = spectral_pass(y, sr, profile, snr_scale_factor=scale)
     applied.append(f"multiband-mmse[{src}]")
@@ -86,7 +101,7 @@ def denoise_audio(
     profile, profile_label = get_profile(genres)
 
     y, sr = sf.read(file_path, always_2d=False)
-    y = y.astype(np.float32)
+    y     = y.astype(np.float32)
 
     y_mono     = y if y.ndim == 1 else y.mean(axis=1)
     snr_before = estimate_snr(y_mono, sr)
