@@ -30,46 +30,56 @@ st.set_page_config(page_title="Audio Analyzer", page_icon="🎵", layout="wide")
 st.markdown("""
 <style>
 /*
- * Všetky farby sú zámerne vynechané — texty dedia farbu od Streamlit témy
- * (color: inherit). Takto fungujú správne v light aj dark móde bez ohľadu
- * na OS preferenciu. Semi-transparentné rgba() pozadia a opacity pre
- * stlmený text sa automaticky prispôsobujú tmavému aj svetlému pozadiu.
+ * Farby cez inherit alebo rgba() – funguje v light aj dark Streamlit móde.
  */
 
-.az-genre-wrap  { margin-bottom: 0.75rem; }
+/* ── Genre bars ─────────────────────────────────────────── */
+.az-genre-wrap  { margin-bottom: 0.65rem; }
 .az-genre-label {
     display: flex;
     justify-content: space-between;
-    font-size: 0.92rem;
+    font-size: 0.88rem;
     font-weight: 600;
-    margin-bottom: 5px;
-    /* farba: inherit zo Streamlit témy */
+    margin-bottom: 4px;
 }
 .az-bar-bg {
-    background: rgba(128, 128, 128, 0.18);
-    border-radius: 6px;
-    height: 12px;
+    background: rgba(128, 128, 128, 0.15);
+    border-radius: 8px;
+    height: 22px;
     overflow: hidden;
+    position: relative;
 }
-.az-bar-fill { height: 12px; border-radius: 6px; }
+.az-bar-fill {
+    height: 22px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    transition: width 0.4s ease;
+}
 
+/* ── Chips ───────────────────────────────────────────────── */
 .az-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 14px 0; }
 .az-chip  {
-    background: rgba(128, 128, 128, 0.10);
-    border: 1px solid rgba(128, 128, 128, 0.22);
+    background: rgba(128, 128, 128, 0.08);
+    border: 1px solid rgba(128, 128, 128, 0.20);
     border-radius: 20px;
     padding: 5px 14px;
     font-size: 0.82rem;
-    /* farba: inherit */
 }
-.az-chip-label { opacity: 0.58; margin-right: 4px; }
+.az-chip-label { opacity: 0.55; margin-right: 4px; }
 .az-chip-value { font-weight: 600; }
 
+/* ── Section headers ────────────────────────────────────── */
 .az-section {
     font-size: 1.05rem;
     font-weight: 700;
     margin: 1.6rem 0 0.7rem 0;
-    /* farba: inherit */
 }
 .az-col-title {
     font-size: 0.8rem;
@@ -78,18 +88,38 @@ st.markdown("""
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 0.6rem;
-    border-bottom: 1px solid rgba(128, 128, 128, 0.28);
+    border-bottom: 1px solid rgba(128, 128, 128, 0.25);
     padding-bottom: 4px;
 }
 .az-divider {
     border: none;
-    border-top: 1px solid rgba(128, 128, 128, 0.18);
+    border-top: 1px solid rgba(128, 128, 128, 0.15);
     margin: 1.4rem 0;
 }
 .az-sub {
     font-size: 0.85rem;
     margin-top: 4px;
     opacity: 0.72;
+}
+
+/* ── Audio player label ─────────────────────────────────── */
+.az-audio-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    opacity: 0.55;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+    margin-top: 8px;
+}
+
+/* ── Noise type description ─────────────────────────────── */
+.az-noise-desc {
+    font-size: 0.82rem;
+    opacity: 0.60;
+    margin-top: -8px;
+    margin-bottom: 16px;
+    padding-left: 4px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -98,18 +128,24 @@ st.markdown("""
 # ── Komponenty ─────────────────────────────────────────────────────────────────
 
 def genre_bars(genres):
-    colors = ["#1db954", "#17a349", "#128a3d"]
+    gradients = [
+        "linear-gradient(90deg, #1db954, #1ed760)",  # 1. – zelený
+        "linear-gradient(90deg, #2196F3, #42a5f5)",  # 2. – modrý
+        "linear-gradient(90deg, #78909C, #90a4ae)",  # 3. – šedý
+    ]
     for i, g in enumerate(genres):
-        color = colors[min(i, len(colors) - 1)]
-        pct   = min(float(g["probability"]), 100)
+        grad = gradients[min(i, len(gradients) - 1)]
+        pct  = min(float(g["probability"]), 100)
+        pct_text = f"{pct:.1f}%" if pct >= 8 else ""
         st.markdown(f"""
         <div class="az-genre-wrap">
             <div class="az-genre-label">
                 <span>{g["genre"].capitalize()}</span>
-                <span>{pct}%</span>
+                <span>{pct:.1f}%</span>
             </div>
             <div class="az-bar-bg">
-                <div class="az-bar-fill" style="width:{pct}%; background:{color};"></div>
+                <div class="az-bar-fill" style="width:{max(pct, 2)}%;
+                     background:{grad};">{pct_text}</div>
             </div>
         </div>""", unsafe_allow_html=True)
 
@@ -138,6 +174,12 @@ def col_title(text):
 
 def note(text):
     st.markdown(f"<p class='az-sub'>{text}</p>", unsafe_allow_html=True)
+
+
+def audio_labeled(path, label):
+    """Audio prehrávač s popisom nad ním."""
+    st.markdown(f"<div class='az-audio-label'>{label}</div>", unsafe_allow_html=True)
+    st.audio(path, format="audio/wav")
 
 
 # ── Analytický panel – rovnaký formát pre oba denoisery ───────────────────────
@@ -183,14 +225,24 @@ def show_analysis_panel(input_path: str, output_path: str,
     avg_clean = spec_clean.mean(axis=1)
     avg_diff  = avg_orig - avg_clean
 
-    # ── Figura: spektrogramy + waveform ──────────────────────────────────
-    # facecolor="white" — matplotlib renderuje ako PNG obrázok, nie CSS element.
-    # Biele pozadie zaručuje čitateľnosť textu v light aj dark Streamlit móde.
-    fig = plt.figure(figsize=(16, 11), facecolor="white")
+    # ── Dark-mode kompatibilné grafy ──────────────────────────────────
+    fig = plt.figure(figsize=(16, 11), facecolor="#0e1117")
     gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.55, wspace=0.30)
+
+    text_color = "#e0e0e0"
+    grid_color = "#333333"
 
     vmin, vmax   = -80, 0
     diff_abs_max = max(float(np.percentile(np.abs(spec_diff), 99)), 1.0)
+
+    def _style_ax(ax):
+        ax.set_facecolor("#0e1117")
+        ax.tick_params(colors=text_color, labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_color(grid_color)
+        ax.xaxis.label.set_color(text_color)
+        ax.yaxis.label.set_color(text_color)
+        ax.title.set_color(text_color)
 
     def _spec_ax(ax, data, title, cmap="magma", v0=vmin, v1=vmax):
         im = ax.imshow(
@@ -201,8 +253,9 @@ def show_analysis_panel(input_path: str, output_path: str,
         ax.set_title(title, fontsize=10, pad=5)
         ax.set_xlabel("čas (s)", fontsize=8)
         ax.set_ylabel("freq (kHz)", fontsize=8)
-        ax.tick_params(labelsize=8)
-        plt.colorbar(im, ax=ax, pad=0.02).ax.tick_params(labelsize=7)
+        cbar = plt.colorbar(im, ax=ax, pad=0.02)
+        cbar.ax.tick_params(labelsize=7, colors=text_color)
+        _style_ax(ax)
 
     _spec_ax(fig.add_subplot(gs[0, 0]), spec_orig,  "Spektrogram – originál")
     _spec_ax(fig.add_subplot(gs[0, 1]), spec_clean, "Spektrogram – po denoising")
@@ -222,9 +275,11 @@ def show_analysis_panel(input_path: str, output_path: str,
     ax_avg.set_title("Priemerné frekvenčné spektrum", fontsize=10, pad=5)
     ax_avg.set_xlabel("freq (kHz)", fontsize=8)
     ax_avg.set_ylabel("dB", fontsize=8)
-    ax_avg.legend(fontsize=8)
-    ax_avg.tick_params(labelsize=8)
+    ax_avg.legend(fontsize=8, facecolor="#1a1a2e", edgecolor=grid_color,
+                  labelcolor=text_color)
     ax_avg.set_xlim(0, sr / 2000)
+    ax_avg.grid(True, alpha=0.15, color=grid_color)
+    _style_ax(ax_avg)
 
     # Waveform (celá šírka)
     t = np.arange(min_len) / sr
@@ -234,9 +289,11 @@ def show_analysis_panel(input_path: str, output_path: str,
     ax_w.set_title("Waveform – porovnanie", fontsize=10, pad=5)
     ax_w.set_xlabel("čas (s)", fontsize=8)
     ax_w.set_ylabel("amplitúda", fontsize=8)
-    ax_w.legend(fontsize=8, loc="upper right")
-    ax_w.tick_params(labelsize=8)
+    ax_w.legend(fontsize=8, loc="upper right", facecolor="#1a1a2e",
+                edgecolor=grid_color, labelcolor=text_color)
     ax_w.set_xlim(t[0], t[-1])
+    ax_w.grid(True, alpha=0.15, color=grid_color)
+    _style_ax(ax_w)
 
     st.pyplot(fig)
     plt.close(fig)
@@ -381,7 +438,11 @@ def load_unet_model():
 # ── Sidebar – U-Net nastavenia ─────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("⚙️ U-Net nastavenia")
+    st.markdown("### 🎵 Audio Analyzer")
+    st.caption("Klasifikácia žánru a odstránenie šumu z audio nahrávok")
+    st.markdown("---")
+
+    st.markdown("#### ⚙️ U-Net nastavenia")
     unet_strength = st.slider(
         "Sila denoisingu", min_value=0.0, max_value=1.0, value=0.8, step=0.05,
         help="0.0 = žiadny efekt, 1.0 = maximálne odstránenie šumu",
@@ -394,11 +455,15 @@ with st.sidebar:
 unet_denoiser = load_unet_model()
 
 with st.sidebar:
+    st.markdown("---")
     if unet_denoiser is not None:
-        st.success("✅ U-Net model načítaný")
-        st.info(f"Zariadenie: {unet_denoiser.device}")
+        st.success(f"✅ U-Net model načítaný ({unet_denoiser.device})")
     else:
         st.warning("⚠️ U-Net model nedostupný")
+
+    st.markdown("---")
+    st.caption("Klasický: MMSE-LSA + LSAR de-click")
+    st.caption("Klasifikácia: SVM + RF + GB ensemble")
 
 
 # ── Hlavička ───────────────────────────────────────────────────────────────────
@@ -422,7 +487,7 @@ if uploaded_file is not None:
     with open(input_path, "wb") as f:
         f.write(uploaded_file.read())
 
-    st.audio(input_path)
+    audio_labeled(input_path, f"▶ Originál – {uploaded_file.name}")
     divider()
 
     mode = st.radio(
@@ -512,13 +577,16 @@ if uploaded_file is not None:
                 else:
                     st.warning("Mierne zníženie kvality.")
 
-                st.audio(output_path, format="audio/wav")
+                audio_labeled(output_path, "▶ Vyčistené (klasický)")
                 with open(output_path, "rb") as f:
                     st.download_button(
                         "⬇ Stiahnuť (klasický)", data=f,
                         file_name="clean_classic.wav", mime="audio/wav",
                         use_container_width=True,
                     )
+
+                with st.expander("🔧 Detaily pipeline"):
+                    st.code(result_classic["engine"], language=None)
 
             with col_u:
                 col_title("U-Net denoiser")
@@ -547,7 +615,7 @@ if uploaded_file is not None:
                     else:
                         st.warning("Mierne zníženie kvality.")
 
-                    st.audio(unet_path, format="audio/wav")
+                    audio_labeled(unet_path, "▶ Vyčistené (U-Net)")
                     with open(unet_path, "rb") as f:
                         st.download_button(
                             "⬇ Stiahnuť (U-Net)", data=f,
@@ -640,20 +708,34 @@ if uploaded_file is not None:
     else:
         section("🔊", "Nastavenia šumu")
 
+        NOISE_DESCRIPTIONS = {
+            "white":   "Plochý spektrálny výkon – rovnomerne cez všetky frekvencie",
+            "pink":    "1/f spektrum – rovnaká energia na oktávu, prirodzenejší zvuk",
+            "brown":   "1/f² spektrum – hlboký rumble, ako vzdialená búrka",
+            "hiss":    "Vysokofrekvenčný šum simulujúci starú analógovú pásku",
+            "hum":     "50 Hz sieťový hum + harmonické – typické pre zlé uzemnenie",
+            "crackle": "Husté drobné impulzy – vinylové praskanie",
+            "clicks":  "Zriedkavé výrazné kliknutia – ako škrabance na platni",
+            "vinyl":   "Kombinácia pink + rumble + crackle – realistická stará nahrávka",
+        }
+
         noise_type = st.selectbox(
             "Typ šumu",
-            options=["white", "pink", "brown", "hiss", "hum",
-                     "crackle", "clicks", "vinyl"],
+            options=list(NOISE_DESCRIPTIONS.keys()),
             format_func=lambda x: {
-                "white":   "⬜ Biely šum – rovnomerné náhodné frekvencie",
-                "pink":    "🌸 Ružový šum – 1/f, prirodzenejší",
-                "brown":   "🟤 Hnedý šum – hlboký rumble (1/f²)",
-                "hiss":    "🎞️ Tape hiss – vysokofrekvenčný, ako stará páska",
-                "hum":     "⚡ Sieťový hum – 50 Hz + harmonické",
-                "crackle": "📻 Praskanie – husté drobné impulzy",
-                "clicks":  "💥 Kliknutia – zriedkavé výrazné škrabance",
-                "vinyl":   "🎵 Vinyl – pink + rumble + crackle (realistické)",
+                "white":   "⬜ Biely šum",
+                "pink":    "🌸 Ružový šum",
+                "brown":   "🟤 Hnedý šum",
+                "hiss":    "🎞️ Tape hiss",
+                "hum":     "⚡ Sieťový hum",
+                "crackle": "📻 Praskanie",
+                "clicks":  "💥 Kliknutia",
+                "vinyl":   "🎵 Vinyl (realistické)",
             }[x],
+        )
+        st.markdown(
+            f"<div class='az-noise-desc'>{NOISE_DESCRIPTIONS[noise_type]}</div>",
+            unsafe_allow_html=True,
         )
 
         noise_level = st.slider(
@@ -682,7 +764,7 @@ if uploaded_file is not None:
                 SNR=f"{result_noise['snr']:.2f} dB",
             )
             note("Čím nižšie SNR, tým viac šumu v nahrávke.")
-            st.audio(noisy_path, format="audio/wav")
+            audio_labeled(noisy_path, "▶ Zašumená nahrávka")
 
             with open(noisy_path, "rb") as f:
                 st.download_button(
